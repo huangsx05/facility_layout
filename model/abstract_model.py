@@ -3,11 +3,13 @@ from abc import ABC, abstractmethod
 
 class AbstractModel(ABC):
     """
+    优化模型的通用类
     We use the template method to define a generic class
     that defines the common procedures of optimization model
     """
     def solve(self):
         """
+        重要
         The callable method of the class.
         :return:
         """
@@ -25,6 +27,7 @@ class AbstractModel(ABC):
     def _set_iterables(self):
         """
         Define the sets used in the model.
+        这里是pass是因为类继承的时候该方法会被改写
         """
         pass
 
