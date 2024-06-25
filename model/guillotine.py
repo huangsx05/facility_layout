@@ -29,16 +29,17 @@ class Guillotine(AbstractModel):
         self.shapes = shapes
         self.upper_bound = upper_bound
         self.m = pulp.LpProblem('guillotine', pulp.LpMaximize)
-        self.orients = {'h', 'v'}
+        self.orients = {'h', 'v'}  # 这里指的是切割的方向，而不是item旋转方向
         return
 
     def _set_iterables(self):
         # indices and shapes of all items and plates
-        self.cap_j = dict()
+        # Key = plate_idx, Value = Rect
+        self.cap_j = dict()  # 所有可能的plates。item是plate的特殊情况
         # indices of all plates
-        self.cap_j_plates = set()
+        self.cap_j_plates = set()  # 所有plate的不同indices，不包括items
         # indices of all items
-        self.cap_j_items = set()
+        self.cap_j_items = set()  # 所有items的不同indices
         # Given a plate and an orientation, store all possible cut positions
         # Key = [plate, orientation], Value = List[positions]
         self.cut_pos_dict = dict()
@@ -49,9 +50,9 @@ class Guillotine(AbstractModel):
         # that can generate j with the corresponding cut position
         # Key = [item, orientation], Value = List[Tuple[plate, cut_pos]]
         self.inverse_plate_cut_dict = dict()
-        # Store all the valid cuts, each is stored as Tuple[position, plate, orientation]
+        # Store all the valid cuts, each is stored as Tuple[position, plate_idx, orientation]
         # Use this to define x variables
-        self.cut_set = set()
+        self.cut_set = set()  # plate_idx指的是一种形状，而不是id
 
         (self.cap_j, self.cap_j_items, self.cut_set, self.plate_cut_dict,
          self.inverse_plate_cut_dict,
@@ -60,11 +61,13 @@ class Guillotine(AbstractModel):
         return
 
     def _set_variables(self):
+        # 每一个item的数量
         self.y = pulp.LpVariable.dicts('y',
-                                       self.cap_j_items,
+                                       self.cap_j_items,  # 对应每一个item
                                        cat=pulp.LpInteger,
                                        lowBound=0,
                                        upBound=self.upper_bound)
+        # 每一条切线被切的次数
         self.x = pulp.LpVariable.dicts('x',
                                        self.cut_set,
                                        cat=pulp.LpInteger,
@@ -72,11 +75,13 @@ class Guillotine(AbstractModel):
         return
 
     def _set_objective(self):
-        self.m += pulp.lpSum(self.y[j] for j in self.cap_j_items)
+        self.m += pulp.lpSum(self.y[j] for j in self.cap_j_items)  # item数量最多
         return
 
     def _set_constraints(self):
-        for j in self.cap_j_items:
+        for j in self.cap_j_items:  # j是shape index，而不是具体的id
+            # 能切出j的切线实际被切的总次数 >= 被切的形状j的数量 + 形状j被留作item的数量
+            # 不是等于号是因为切完之后不一定得到形状j，也可能是其他比j大的形状
             self.m += (
                 pulp.lpSum(self.x[q, k, o] for o in self.orients
                            for (q, k) in self.inverse_plate_cut_dict.get(
@@ -85,6 +90,7 @@ class Guillotine(AbstractModel):
                            for q in self.cut_pos_dict.get((j, o), list())) -
                 self.y[j] >= 0, f'shape_{j}')
         for j in self.cap_j_plates:
+            # 同上，只是不属于item，减少了y变量的数量
             if j == 0:
                 continue
             self.m += (
@@ -94,6 +100,7 @@ class Guillotine(AbstractModel):
                 pulp.lpSum(self.x[q, j, o] for o in self.orients
                            for q in self.cut_pos_dict.get((j, o), list())) >=
                 0, f'plate_{j}')
+        # 原来的板只能被切一次
         self.m += (pulp.lpSum(self.x[q, 0, o] for o in self.orients
                               for q in self.cut_pos_dict.get((0, o), list()))
                    <= 1, 'panel')
@@ -126,12 +133,16 @@ class Guillotine(AbstractModel):
         return result_blocks, result_cuts
 
     def _plate_variable_enumeration(self):
-        cut_pos_dict = dict()
-        shape_j = set()
-        cap_j = dict()
-        inverse_cap_j = dict()
-        cap_j_set = set()
-        un_processed = set()
+        """
+        遍历整个切割的过程，获得所有可能的切线和切割得到的plates。这些plates的其中一些会被保留为items。
+        """
+        cut_pos_dict = dict()   # return. cut_pos_dict[plate_idx, orientation] = positions  一个plate在一个方向上所有可能的切割位置
+        shape_j = set()         # return, shape index set, len = 2
+        cap_j = dict()          # return, {index: Rect}
+        inverse_cap_j = dict()  # {Rect: index}
+        cap_j_set = set()       # Rect set
+        un_processed = set()    # plate_index set
+
         # add gird
         grid = Rect(self.grid[0], self.grid[1])
         cap_j[0] = grid
@@ -148,20 +159,20 @@ class Guillotine(AbstractModel):
             cap_j_set.add(rect_shape)
             shape_j.add(count)
 
-        x_set = list()
+        x_set = list()  # return. 对应变量x. 每一个元素是(position, plate_idx, otientation), 对应一条切线。
         # Key = [plate, cut_pos, orientation], Value = List[plate or item in cap_j]
-        cut_dict = dict()
+        cut_dict = dict()  # return. 切之前的一块板和切之后的两块板之间基于index的对应关系。cut_dict[(plate_idx, position, orientation)] = [plate1_idx, plate2_idx]
         # Key = [item, orientation], Value = List[Tuple[cut_pos, plate]]
-        inverse_cut_dict = dict()
+        inverse_cut_dict = dict()  # return. item和可以切出item的板之间基于index的对应关系. inverse_cut_dict[(plate1_idx)] = (position, plate_idx)
 
-        while un_processed:
+        while un_processed:  # 一次处理一个plate
             plate_idx = un_processed.pop()
-            plate = cap_j[plate_idx]
+            plate = cap_j[plate_idx]  # Rect
             for o in self.orients:
-                positions = self._compute_possible_cut_positions(plate, o)
+                positions = self._compute_possible_cut_positions(plate, o)  # 根据shapes得到所有可能切割的位置
                 cut_pos_dict[plate_idx, o] = positions
-                for position in positions:
-                    plate1, plate2 = _cut(plate, o, position)
+                for position in positions:  # 遍历每一个切割位置得到切割结果
+                    plate1, plate2 = _cut(plate, o, position)  # plate1和plate2都只是形状，不包含index
                     if plate1 not in cap_j_set:
                         count = len(cap_j)
                         cap_j[count] = plate1

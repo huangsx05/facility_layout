@@ -10,7 +10,7 @@ def main():
     # mode = 'set_covering'
     mode = 'guillotine'
     if mode == 'set_covering':
-        model = SetCover(grid, shapes, upper_bound)
+        model = SetCover(grid, shapes, upper_bound)  # 像素级别求解，只有binary决策变量
     elif mode == 'guillotine':
         model = Guillotine(grid, shapes, upper_bound)
     else:
@@ -22,3 +22,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# 可都是根据遍历的思想，针对所有的可能性创建变量
